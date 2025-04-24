@@ -1,0 +1,705 @@
+// Project structure:
+// src/main/java/com/railway/bookingservice/
+
+// 1. Main Application Class
+package com.railway.bookingservice;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.cloud.netflix.eureka.EnableEurekaClient;
+import org.springframework.cloud.openfeign.EnableFeignClients;
+
+@SpringBootApplication
+@EnableEurekaClient
+@EnableFeignClients
+public class BookingServiceApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(BookingServiceApplication.class, args);
+    }
+}
+
+// 2. Model Classes
+
+// Booking.java
+package com.railway.bookingservice.model;
+
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import javax.persistence.*;
+import java.time.LocalDateTime;
+import java.util.List;
+
+@Entity
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+public class Booking {
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+    
+    private String pnrNumber;
+    private Long userId;
+    private Long trainId;
+    private LocalDateTime bookingDate;
+    private LocalDateTime journeyDate;
+    private String sourceStation;
+    private String destinationStation;
+    private double totalFare;
+    private String status; // CONFIRMED, WAITING, CANCELLED
+    
+    @OneToMany(cascade = CascadeType.ALL, mappedBy = "booking")
+    private List<Passenger> passengers;
+}
+
+// Passenger.java
+package com.railway.bookingservice.model;
+
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import javax.persistence.*;
+
+@Entity
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+public class Passenger {
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+    
+    private String name;
+    private int age;
+    private String gender;
+    private String seatNumber;
+    
+    @ManyToOne
+    @JoinColumn(name = "booking_id")
+    @JsonIgnore
+    private Booking booking;
+}
+
+// 3. DTOs
+
+// BookingRequestDTO.java
+package com.railway.bookingservice.dto;
+
+import lombok.Data;
+
+import java.time.LocalDateTime;
+import java.util.List;
+
+@Data
+public class BookingRequestDTO {
+    private Long userId;
+    private Long trainId;
+    private LocalDateTime journeyDate;
+    private String sourceStation;
+    private String destinationStation;
+    private String classType;
+    private List<PassengerDTO> passengers;
+}
+
+// PassengerDTO.java
+package com.railway.bookingservice.dto;
+
+import lombok.Data;
+
+@Data
+public class PassengerDTO {
+    private String name;
+    private int age;
+    private String gender;
+}
+
+// BookingResponseDTO.java
+package com.railway.bookingservice.dto;
+
+import lombok.Data;
+
+import java.time.LocalDateTime;
+import java.util.List;
+
+@Data
+public class BookingResponseDTO {
+    private String pnrNumber;
+    private Long userId;
+    private Long trainId;
+    private String trainName;
+    private LocalDateTime bookingDate;
+    private LocalDateTime journeyDate;
+    private String sourceStation;
+    private String destinationStation;
+    private double totalFare;
+    private String status;
+    private List<PassengerDTO> passengers;
+}
+
+// 4. Repository Interfaces
+
+// BookingRepository.java
+package com.railway.bookingservice.repository;
+
+import com.railway.bookingservice.model.Booking;
+import org.springframework.data.jpa.repository.JpaRepository;
+
+import java.util.List;
+import java.util.Optional;
+
+public interface BookingRepository extends JpaRepository<Booking, Long> {
+    Optional<Booking> findByPnrNumber(String pnrNumber);
+    List<Booking> findByUserId(Long userId);
+}
+
+// PassengerRepository.java
+package com.railway.bookingservice.repository;
+
+import com.railway.bookingservice.model.Passenger;
+import org.springframework.data.jpa.repository.JpaRepository;
+
+public interface PassengerRepository extends JpaRepository<Passenger, Long> {
+}
+
+// 5. Feign Clients for Inter-Service Communication
+
+// UserServiceClient.java
+package com.railway.bookingservice.client;
+
+import org.springframework.cloud.openfeign.FeignClient;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+
+@FeignClient(name = "user-service")
+public interface UserServiceClient {
+    @GetMapping("/api/users/{userId}/validate")
+    ResponseEntity<Boolean> validateUser(@PathVariable("userId") Long userId);
+}
+
+// TrainServiceClient.java
+package com.railway.bookingservice.client;
+
+import com.railway.bookingservice.dto.TrainDTO;
+import org.springframework.cloud.openfeign.FeignClient;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PutMapping;
+
+@FeignClient(name = "train-service")
+public interface TrainServiceClient {
+    @GetMapping("/api/trains/{trainId}")
+    ResponseEntity<TrainDTO> getTrainById(@PathVariable("trainId") Long trainId);
+    
+    @GetMapping("/api/trains/{trainId}/fare/{classType}")
+    ResponseEntity<Double> getTrainFare(@PathVariable("trainId") Long trainId, 
+                                       @PathVariable("classType") String classType);
+    
+    @PutMapping("/api/trains/{trainId}/seats/reserve")
+    ResponseEntity<Boolean> reserveSeats(@PathVariable("trainId") Long trainId);
+}
+
+// PaymentServiceClient.java
+package com.railway.bookingservice.client;
+
+import com.railway.bookingservice.dto.PaymentRequestDTO;
+import org.springframework.cloud.openfeign.FeignClient;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+
+@FeignClient(name = "payment-service")
+public interface PaymentServiceClient {
+    @PostMapping("/api/payments/process")
+    ResponseEntity<String> processPayment(@RequestBody PaymentRequestDTO paymentRequest);
+}
+
+// 6. Services
+
+// BookingService.java
+package com.railway.bookingservice.service;
+
+import com.railway.bookingservice.dto.BookingRequestDTO;
+import com.railway.bookingservice.dto.BookingResponseDTO;
+import com.railway.bookingservice.dto.CancellationRequestDTO;
+import com.railway.bookingservice.dto.CancellationResponseDTO;
+
+import java.util.List;
+
+public interface BookingService {
+    BookingResponseDTO createBooking(BookingRequestDTO bookingRequest);
+    BookingResponseDTO getBookingByPnr(String pnrNumber);
+    List<BookingResponseDTO> getBookingsByUserId(Long userId);
+    CancellationResponseDTO cancelBooking(String pnrNumber, CancellationRequestDTO request);
+}
+
+// BookingServiceImpl.java
+package com.railway.bookingservice.service.impl;
+
+import com.railway.bookingservice.client.PaymentServiceClient;
+import com.railway.bookingservice.client.TrainServiceClient;
+import com.railway.bookingservice.client.UserServiceClient;
+import com.railway.bookingservice.dto.*;
+import com.railway.bookingservice.exception.BookingException;
+import com.railway.bookingservice.exception.ResourceNotFoundException;
+import com.railway.bookingservice.model.Booking;
+import com.railway.bookingservice.model.Passenger;
+import com.railway.bookingservice.repository.BookingRepository;
+import com.railway.bookingservice.service.BookingService;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Random;
+import java.util.UUID;
+import java.util.stream.Collectors;
+
+@Service
+@Slf4j
+public class BookingServiceImpl implements BookingService {
+
+    @Autowired
+    private BookingRepository bookingRepository;
+    
+    @Autowired
+    private UserServiceClient userServiceClient;
+    
+    @Autowired
+    private TrainServiceClient trainServiceClient;
+    
+    @Autowired
+    private PaymentServiceClient paymentServiceClient;
+    
+    @Override
+    @Transactional
+    public BookingResponseDTO createBooking(BookingRequestDTO bookingRequest) {
+        // Validate user exists
+        boolean userValid = userServiceClient.validateUser(bookingRequest.getUserId()).getBody();
+        if (!userValid) {
+            throw new BookingException("User not found or invalid");
+        }
+        
+        // Get train details and validate
+        TrainDTO trainDetails = trainServiceClient.getTrainById(bookingRequest.getTrainId()).getBody();
+        if (trainDetails == null) {
+            throw new BookingException("Train not found or invalid");
+        }
+        
+        // Check if passenger count is valid (max 6 as per requirements)
+        if (bookingRequest.getPassengers().size() > 6) {
+            throw new BookingException("Maximum 6 passengers allowed per booking");
+        }
+        
+        // Calculate fare
+        double farePerPerson = trainServiceClient.getTrainFare(
+            bookingRequest.getTrainId(), 
+            bookingRequest.getClassType()
+        ).getBody();
+        
+        double totalFare = farePerPerson * bookingRequest.getPassengers().size();
+        
+        // Create booking entity
+        Booking booking = new Booking();
+        booking.setPnrNumber(generatePNRNumber());
+        booking.setUserId(bookingRequest.getUserId());
+        booking.setTrainId(bookingRequest.getTrainId());
+        booking.setBookingDate(LocalDateTime.now());
+        booking.setJourneyDate(bookingRequest.getJourneyDate());
+        booking.setSourceStation(bookingRequest.getSourceStation());
+        booking.setDestinationStation(bookingRequest.getDestinationStation());
+        booking.setTotalFare(totalFare);
+        booking.setStatus("CONFIRMED");
+        
+        // Create passenger entities
+        List<Passenger> passengers = new ArrayList<>();
+        for (PassengerDTO passengerDTO : bookingRequest.getPassengers()) {
+            Passenger passenger = new Passenger();
+            passenger.setName(passengerDTO.getName());
+            passenger.setAge(passengerDTO.getAge());
+            passenger.setGender(passengerDTO.getGender());
+            passenger.setSeatNumber(generateSeatNumber());
+            passenger.setBooking(booking);
+            passengers.add(passenger);
+        }
+        booking.setPassengers(passengers);
+        
+        // Reserve seats on the train
+        boolean seatsReserved = trainServiceClient.reserveSeats(bookingRequest.getTrainId()).getBody();
+        if (!seatsReserved) {
+            throw new BookingException("Failed to reserve seats on the train");
+        }
+        
+        // Save booking
+        Booking savedBooking = bookingRepository.save(booking);
+        
+        // Process payment through payment service
+        PaymentRequestDTO paymentRequest = new PaymentRequestDTO();
+        paymentRequest.setBookingId(savedBooking.getId());
+        paymentRequest.setUserId(savedBooking.getUserId());
+        paymentRequest.setAmount(savedBooking.getTotalFare());
+        
+        String paymentResponse = paymentServiceClient.processPayment(paymentRequest).getBody();
+        
+        // Convert to response DTO
+        return mapToBookingResponseDTO(savedBooking, trainDetails.getTrainName());
+    }
+    
+    @Override
+    public BookingResponseDTO getBookingByPnr(String pnrNumber) {
+        Booking booking = bookingRepository.findByPnrNumber(pnrNumber)
+            .orElseThrow(() -> new ResourceNotFoundException("Booking not found with PNR: " + pnrNumber));
+        
+        // Get train details
+        TrainDTO trainDetails = trainServiceClient.getTrainById(booking.getTrainId()).getBody();
+        
+        return mapToBookingResponseDTO(booking, trainDetails != null ? trainDetails.getTrainName() : "Unknown");
+    }
+    
+    @Override
+    public List<BookingResponseDTO> getBookingsByUserId(Long userId) {
+        List<Booking> bookings = bookingRepository.findByUserId(userId);
+        
+        return bookings.stream()
+            .map(booking -> {
+                TrainDTO trainDetails = trainServiceClient.getTrainById(booking.getTrainId()).getBody();
+                return mapToBookingResponseDTO(booking, trainDetails != null ? trainDetails.getTrainName() : "Unknown");
+            })
+            .collect(Collectors.toList());
+    }
+    
+    @Override
+    @Transactional
+    public CancellationResponseDTO cancelBooking(String pnrNumber, CancellationRequestDTO request) {
+        Booking booking = bookingRepository.findByPnrNumber(pnrNumber)
+            .orElseThrow(() -> new ResourceNotFoundException("Booking not found with PNR: " + pnrNumber));
+        
+        // Validate if booking belongs to the user
+        if (!booking.getUserId().equals(request.getUserId())) {
+            throw new BookingException("Unauthorized cancellation request");
+        }
+        
+        // Check if booking is already cancelled
+        if ("CANCELLED".equals(booking.getStatus())) {
+            throw new BookingException("Booking is already cancelled");
+        }
+        
+        // Cancel booking
+        booking.setStatus("CANCELLED");
+        bookingRepository.save(booking);
+        
+        // Create response
+        CancellationResponseDTO response = new CancellationResponseDTO();
+        response.setPnrNumber(pnrNumber);
+        response.setCancellationDate(LocalDateTime.now());
+        response.setRefundAmount(calculateRefundAmount(booking));
+        response.setStatus("CANCELLED");
+        
+        return response;
+    }
+    
+    private String generatePNRNumber() {
+        // PNR format: Year + Month + Day + Random 4 digits
+        LocalDateTime now = LocalDateTime.now();
+        String datePart = String.format("%d%02d%02d", 
+            now.getYear(), now.getMonthValue(), now.getDayOfMonth());
+        
+        // Random 4 digits
+        Random random = new Random();
+        String randomPart = String.format("%04d", random.nextInt(10000));
+        
+        return datePart + randomPart;
+    }
+    
+    private String generateSeatNumber() {
+        // Simple implementation for seat assignment
+        // In a real system, this would involve actual seat allocation logic
+        char coach = (char) ('A' + new Random().nextInt(5));
+        int seatNum = new Random().nextInt(72) + 1;
+        return coach + String.format("%02d", seatNum);
+    }
+    
+    private double calculateRefundAmount(Booking booking) {
+        // Simple refund calculation
+        // In a real system, this would involve cancellation policy based on time to journey
+        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime journeyDate = booking.getJourneyDate();
+        
+        long daysToJourney = java.time.Duration.between(now, journeyDate).toDays();
+        
+        if (daysToJourney > 7) {
+            return booking.getTotalFare() * 0.9; // 90% refund
+        } else if (daysToJourney > 3) {
+            return booking.getTotalFare() * 0.7; // 70% refund
+        } else if (daysToJourney > 1) {
+            return booking.getTotalFare() * 0.5; // 50% refund
+        } else {
+            return booking.getTotalFare() * 0.25; // 25% refund
+        }
+    }
+    
+    private BookingResponseDTO mapToBookingResponseDTO(Booking booking, String trainName) {
+        BookingResponseDTO responseDTO = new BookingResponseDTO();
+        responseDTO.setPnrNumber(booking.getPnrNumber());
+        responseDTO.setUserId(booking.getUserId());
+        responseDTO.setTrainId(booking.getTrainId());
+        responseDTO.setTrainName(trainName);
+        responseDTO.setBookingDate(booking.getBookingDate());
+        responseDTO.setJourneyDate(booking.getJourneyDate());
+        responseDTO.setSourceStation(booking.getSourceStation());
+        responseDTO.setDestinationStation(booking.getDestinationStation());
+        responseDTO.setTotalFare(booking.getTotalFare());
+        responseDTO.setStatus(booking.getStatus());
+        
+        List<PassengerDTO> passengerDTOs = booking.getPassengers().stream()
+            .map(passenger -> {
+                PassengerDTO dto = new PassengerDTO();
+                dto.setName(passenger.getName());
+                dto.setAge(passenger.getAge());
+                dto.setGender(passenger.getGender());
+                return dto;
+            })
+            .collect(Collectors.toList());
+        
+        responseDTO.setPassengers(passengerDTOs);
+        
+        return responseDTO;
+    }
+}
+
+// 7. Controllers
+
+// BookingController.java
+package com.railway.bookingservice.controller;
+
+import com.railway.bookingservice.dto.BookingRequestDTO;
+import com.railway.bookingservice.dto.BookingResponseDTO;
+import com.railway.bookingservice.dto.CancellationRequestDTO;
+import com.railway.bookingservice.dto.CancellationResponseDTO;
+import com.railway.bookingservice.service.BookingService;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
+
+@RestController
+@RequestMapping("/api/bookings")
+public class BookingController {
+
+    @Autowired
+    private BookingService bookingService;
+    
+    @PostMapping
+    public ResponseEntity<BookingResponseDTO> createBooking(@RequestBody BookingRequestDTO bookingRequest) {
+        BookingResponseDTO response = bookingService.createBooking(bookingRequest);
+        return new ResponseEntity<>(response, HttpStatus.CREATED);
+    }
+    
+    @GetMapping("/pnr/{pnrNumber}")
+    public ResponseEntity<BookingResponseDTO> getBookingByPnr(@PathVariable String pnrNumber) {
+        BookingResponseDTO bookingResponseDTO = bookingService.getBookingByPnr(pnrNumber);
+        return ResponseEntity.ok(bookingResponseDTO);
+    }
+    
+    @GetMapping("/user/{userId}")
+    public ResponseEntity<List<BookingResponseDTO>> getBookingsByUserId(@PathVariable Long userId) {
+        List<BookingResponseDTO> bookings = bookingService.getBookingsByUserId(userId);
+        return ResponseEntity.ok(bookings);
+    }
+    
+    @PutMapping("/cancel/{pnrNumber}")
+    public ResponseEntity<CancellationResponseDTO> cancelBooking(
+            @PathVariable String pnrNumber,
+            @RequestBody CancellationRequestDTO request) {
+        CancellationResponseDTO response = bookingService.cancelBooking(pnrNumber, request);
+        return ResponseEntity.ok(response);
+    }
+}
+
+// 8. Exception Handling
+
+// ResourceNotFoundException.java
+package com.railway.bookingservice.exception;
+
+public class ResourceNotFoundException extends RuntimeException {
+    public ResourceNotFoundException(String message) {
+        super(message);
+    }
+}
+
+// BookingException.java
+package com.railway.bookingservice.exception;
+
+public class BookingException extends RuntimeException {
+    public BookingException(String message) {
+        super(message);
+    }
+}
+
+// GlobalExceptionHandler.java
+package com.railway.bookingservice.exception;
+
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.RestControllerAdvice;
+
+import java.time.LocalDateTime;
+import java.util.HashMap;
+import java.util.Map;
+
+@RestControllerAdvice
+public class GlobalExceptionHandler {
+
+    @ExceptionHandler(ResourceNotFoundException.class)
+    public ResponseEntity<Map<String, Object>> handleResourceNotFoundException(ResourceNotFoundException ex) {
+        Map<String, Object> errorResponse = new HashMap<>();
+        errorResponse.put("timestamp", LocalDateTime.now());
+        errorResponse.put("status", HttpStatus.NOT_FOUND.value());
+        errorResponse.put("error", "Not Found");
+        errorResponse.put("message", ex.getMessage());
+        
+        return new ResponseEntity<>(errorResponse, HttpStatus.NOT_FOUND);
+    }
+    
+    @ExceptionHandler(BookingException.class)
+    public ResponseEntity<Map<String, Object>> handleBookingException(BookingException ex) {
+        Map<String, Object> errorResponse = new HashMap<>();
+        errorResponse.put("timestamp", LocalDateTime.now());
+        errorResponse.put("status", HttpStatus.BAD_REQUEST.value());
+        errorResponse.put("error", "Bad Request");
+        errorResponse.put("message", ex.getMessage());
+        
+        return new ResponseEntity<>(errorResponse, HttpStatus.BAD_REQUEST);
+    }
+    
+    @ExceptionHandler(Exception.class)
+    public ResponseEntity<Map<String, Object>> handleGlobalException(Exception ex) {
+        Map<String, Object> errorResponse = new HashMap<>();
+        errorResponse.put("timestamp", LocalDateTime.now());
+        errorResponse.put("status", HttpStatus.INTERNAL_SERVER_ERROR.value());
+        errorResponse.put("error", "Internal Server Error");
+        errorResponse.put("message", ex.getMessage());
+        
+        return new ResponseEntity<>(errorResponse, HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+}
+
+// 9. Configuration
+
+// application.properties
+package com.railway.bookingservice.config;
+
+// application.properties content
+
+/*
+# Server Configuration
+server.port=8082
+spring.application.name=booking-service
+
+# Database Configuration
+spring.datasource.url=jdbc:mysql://localhost:3306/railway_booking_db
+spring.datasource.username=root
+spring.datasource.password=password
+spring.jpa.hibernate.ddl-auto=update
+spring.jpa.show-sql=true
+spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.MySQL8Dialect
+
+# Eureka Client Configuration
+eureka.client.service-url.defaultZone=http://localhost:8761/eureka/
+eureka.instance.prefer-ip-address=true
+
+# Circuit Breaker Configuration
+feign.circuitbreaker.enabled=true
+
+# Ribbon Configuration
+ribbon.ReadTimeout=60000
+ribbon.ConnectTimeout=60000
+
+# Actuator Configuration
+management.endpoints.web.exposure.include=*
+management.endpoint.health.show-details=always
+*/
+
+// FeignConfig.java
+package com.railway.bookingservice.config;
+
+import feign.Logger;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+@Configuration
+public class FeignConfig {
+    @Bean
+    Logger.Level feignLoggerLevel() {
+        return Logger.Level.FULL;
+    }
+}
+
+// Additional DTOs
+
+// TrainDTO.java
+package com.railway.bookingservice.dto;
+
+import lombok.Data;
+
+@Data
+public class TrainDTO {
+    private Long id;
+    private String trainNumber;
+    private String trainName;
+    private String sourceStation;
+    private String destinationStation;
+    private double fareGeneralClass;
+    private double fareFirstClass;
+    // Other fields as needed
+}
+
+// PaymentRequestDTO.java
+package com.railway.bookingservice.dto;
+
+import lombok.Data;
+
+@Data
+public class PaymentRequestDTO {
+    private Long bookingId;
+    private Long userId;
+    private double amount;
+    // Other fields as needed
+}
+
+// CancellationRequestDTO.java
+package com.railway.bookingservice.dto;
+
+import lombok.Data;
+
+@Data
+public class CancellationRequestDTO {
+    private Long userId;
+    private String reason;
+}
+
+// CancellationResponseDTO.java
+package com.railway.bookingservice.dto;
+
+import lombok.Data;
+
+import java.time.LocalDateTime;
+
+@Data
+public class CancellationResponseDTO {
+    private String pnrNumber;
+    private LocalDateTime cancellationDate;
+    private double refundAmount;
+    private String status;
+}
