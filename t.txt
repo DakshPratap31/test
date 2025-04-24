@@ -1,0 +1,124 @@
+ User & Authentication Service
+Combines:
+
+User Service
+
+Authentication/Authorization
+
+Responsibilities:
+
+Register and manage users
+
+Login/Logout
+
+Issue JWT tokens
+
+Endpoints:
+
+POST /auth/register
+
+POST /auth/login
+
+GET /users/{id}
+
+Train Management Service
+Combines:
+
+Train Service
+
+Fare Service
+
+Responsibilities:
+
+Add/update train details
+
+Set fares per train class
+
+Fetch available trains and fares
+
+Endpoints:
+
+GET /trains
+
+GET /trains/{id}
+
+POST /trains (Admin)
+
+PUT /trains/{id} (Admin)
+
+GET /trains/{id}/fare?class=1A
+
+PUT /trains/{id}/fare (Admin)
+
+Why Combine?
+
+Train details and fare information are usually accessed together and often modified by the same workflows (admin dashboards).
+
+3. Booking Service
+Combines:
+
+Reservation Service
+
+Cancellation Service
+
+Responsibilities:
+
+Reserve tickets
+
+Cancel reservations
+
+Generate & validate PNRs
+
+Track reservation status
+
+Endpoints:
+
+POST /bookings
+
+GET /bookings/{pnr}
+
+DELETE /bookings/{pnr}
+
+Why Combine?
+
+Reservation and cancellation involve similar data and business logic (seats, PNRs, status changes).
+
+4. Payment & Notification Service
+Combines:
+
+Payment Service
+
+Notification Service
+
+Responsibilities:
+
+Handle payments and refunds
+
+Send SMS/email for booking or cancellation
+
+Events:
+
+Listen for booking.confirmed, booking.cancelled events
+
+Endpoints:
+
+POST /payments
+
+POST /notifications/send
+
+Why Combine?
+
+Payment success/failure often immediately triggers a notification. Keeping them together simplifies this interaction.
+
+5. Admin Dashboard Service
+Responsibilities:
+
+Provide admin interface to:
+
+Update trains, fares, and monitor bookings
+
+View metrics/statistics
+
+Endpoints:
+
+Internal APIs or Web UI Dashboard (React or Angular frontend)
